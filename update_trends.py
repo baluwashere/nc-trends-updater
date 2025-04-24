@@ -15,13 +15,13 @@ print("Connected to Supabase")
 dn_groups = supabase.table("dn_groups").select("id, name, filters").execute().data
 
 # Load dn table
-dn_data = supabase.table("dn").select("id, domain_name, tld, word_count, domain_type").execute().data
+dn_data = supabase.table("dn").select("id, dn_name, tld, word_count, dn_type").execute().data
 
 # For each group, filter matching domains and calculate metrics
 trend_rows = []
 
 def matches_filter(domain, filters):
-    name = domain["domain_name"].lower()
+    name = domain["dn_name"].lower()
     word_count = domain.get("word_count", 0)
     tld = domain.get("tld", "")
 
