@@ -102,7 +102,7 @@ for group in dn_groups:
 
 # Replace data in trends table
 if trend_rows:
-    supabase.table("trends").delete().neq("id", "").execute()
+    supabase.table("trends").delete().execute()  # Apaga tudo corretamente
     supabase.table("trends").insert(trend_rows).execute()
 
 print("✅ Trends updated with dynamic filter matching!")
