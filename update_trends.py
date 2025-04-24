@@ -43,12 +43,14 @@ for group in dn_groups:
 
     matching_ids = [d["id"] for d in dn_data if matches_filter(d, filters)]
     if not matching_ids:
+        print(f"❌ Group '{group_name}' skipped: no matching domains")
         continue
 
     # Fetch sales
     sales_resp = supabase.table("sales").select("price_adjusted, date").in_("dn_id", matching_ids).execute()
     sales = pd.DataFrame(sales_resp.data)
     if sales.empty:
+        print(f"❌ Group '{group_name}' skipped: no sales found")
         continue
 
     # Convert date
@@ -88,6 +90,7 @@ for group in dn_groups:
 
     # Prepare row
     trend_rows.append({
+        "group_id": group_id,
         "group_name": group_name,
         "total_volume": total_volume,
         "total_avg_price": round(total_avg_price, 2),
