@@ -61,11 +61,12 @@ for group in dn_groups:
     total_median_price = sales["price_adjusted"].median()
     total_top_price = sales["price_adjusted"].max()
 
-    # Rolling 6-month window
-    end_date = sales["date"].max()
+    # Rolling 6-month window based on current date
+    end_date = pd.Timestamp.today()
     start_6mo = end_date - pd.DateOffset(months=6)
-    window_now = sales[sales["date"] >= start_6mo]
     start_prev_6mo = start_6mo - pd.DateOffset(months=6)
+
+    window_now = sales[sales["date"] >= start_6mo]
     window_prev = sales[(sales["date"] >= start_prev_6mo) & (sales["date"] < start_6mo)]
 
     if not window_now.empty:
