@@ -1,73 +1,82 @@
 import os
 import pandas as pd
 from supabase import create_client, Client
-from datetime import datetime
-from dotenv import load_dotenv
-import json
-
-# Load environment variables
-load_dotenv("config/supabase.env")
+from datetime import datetime, timedelta
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise ValueError("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in environment variables.")
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-print("🔁 Fetching data from Supabase...")
-dn = pd.DataFrame(supabase.table("dn").select("*").execute().data)
-sales = pd.DataFrame(supabase.table("sales").select("*").execute().data)
-groups = pd.DataFrame(supabase.table("dn_groups").select("*").execute().data)
+print("Connected to Supabase")
 
-if dn.empty or sales.empty or groups.empty:
-    raise Exception("One or more required tables are empty.")
+# Load dn_groups table
+dn_groups = supabase.table("dn_groups").select("id, keyword_group, criteria").execute().data
 
-sales["date"] = pd.to_datetime(sales["date"])
-sales["month"] = sales["date"].dt.to_period("M")
+# For each group, fetch matching sales and calculate metrics
+trend_rows = []
 
-# Merge dn and sales
-merged = sales.merge(dn, left_on="dn_id", right_on="id", suffixes=("_sale", "_dn"))
-merged["keywords"] = merged["keywords"].apply(lambda x: x if isinstance(x, list) else [])
+for group in dn_groups:
+    keyword_group = group["keyword_group"]
+    group_id = group["id"]
 
-def matches_group(row, filters):
-    if filters.get("tld") and row["tld"] != filters["tld"]:
-        return False
-    if filters.get("word_count") and row["word_count"] != filters["word_count"]:
-        return False
-    if filters.get("starts_with"):
-        return any(kw.lower().startswith(filters["starts_with"].lower()) for kw in row["keywords"])
-    if filters.get("ends_with"):
-        return any(kw.lower().endswith(filters["ends_with"].lower()) for kw in row["keywords"])
-    return True
-
-updates = []
-now = datetime.utcnow().isoformat()
-
-print("🔍 Calculating trends for each group...")
-for _, group in groups.iterrows():
-    try:
-        filters = json.loads(group["filters"])
-    except:
-        continue
-    group_df = merged[merged.apply(lambda row: matches_group(row, filters), axis=1)]
-    if group_df.empty:
+    # Fetch domains in group
+    dn_resp = supabase.table("dn").select("id").eq("group_id", group_id).execute()
+    domain_ids = [d["id"] for d in dn_resp.data]
+    if not domain_ids:
         continue
 
-    grouped = group_df.groupby("month")["price_adjusted"].agg(["count", "mean"]).reset_index()
-    grouped["growth_pct"] = grouped["mean"].pct_change() * 100
-    for _, row in grouped.iterrows():
-        updates.append({
-            "keyword_group": f'2word-com-{filters.get("starts_with", filters.get("ends_with", "unknown"))}' if filters.get("starts_with") else f'2word-com-ends-with-{filters.get("ends_with", "unknown")}',
-            "volume": int(row["count"]),
-            "avg_price": float(row["mean"]),
-            "growth_pct": float(row["growth_pct"]) if pd.notnull(row["growth_pct"]) else None,
-            "time_range": str(row["month"])
-        })
+    # Fetch sales
+    sales_resp = supabase.table("sales").select("price_adjusted, date").in_("dn_id", domain_ids).execute()
+    sales = pd.DataFrame(sales_resp.data)
+    if sales.empty:
+        continue
 
-print(f"📤 Uploading {len(updates)} trend entries to Supabase...")
-for trend in updates:
-    supabase.table("trends").upsert(trend, on_conflict=["keyword_group", "time_range"]).execute()
+    # Convert date
+    sales["date"] = pd.to_datetime(sales["date"])
+    sales.sort_values("date", inplace=True)
 
-print("✅ Trends updated successfully.")
+    # Overall metrics
+    total_volume = len(sales)
+    total_avg_price = sales["price_adjusted"].mean()
+    total_median_price = sales["price_adjusted"].median()
+    total_top_price = sales["price_adjusted"].max()
+
+    # Rolling 6-month window
+    end_date = sales["date"].max()
+    start_6mo = end_date - pd.DateOffset(months=6)
+    window_now = sales[sales["date"] >= start_6mo]
+    start_prev_6mo = start_6mo - pd.DateOffset(months=6)
+    window_prev = sales[(sales["date"] >= start_prev_6mo) & (sales["date"] < start_6mo)]
+
+    if not window_now.empty:
+        avg_price_rolling_6mo = window_now["price_adjusted"].mean()
+        median_price_6mo = window_now["price_adjusted"].median()
+        top_price_6mo = window_now["price_adjusted"].max()
+        total_volume_rolling_6mo = len(window_now)
+        avg_prev = window_prev["price_adjusted"].mean() if not window_prev.empty else 0
+        if avg_prev:
+            growth_pct_6mo = ((avg_price_rolling_6mo - avg_prev) / avg_prev) * 100
+        else:
+            growth_pct_6mo = None
+    else:
+        avg_price_rolling_6mo = None
+        median_price_6mo = None
+        top_price_6mo = None
+        total_volume_rolling_6mo = 0
+        growth_pct_6mo = None
+
+    # Prepare row
+    trend_rows.append({
+        "keyword_group": keyword_group,
+        "total_volume": total_volume,
+        "total_avg_price": round(total_avg_price, 2),
+        "total_median_price": round(total_median_price, 2),
+        "total_top_price": round(total_top_price, 2),
+        "avg_price_rolling_6mo": round(avg_price_rolling_6mo, 2) if avg_price_rolling_6mo else None,
+        "median_price_6mo": round(median_price_6mo, 2) if median_price_6mo else None,
+        "top_price_6mo": round(top_price_6mo, 2) if top_price_6mo else None,
+        "total_volume_rolling_6mo": total_volume_rolling_6mo,
+        "growth_pct_6mo": round(growth_pct_6mo, 2) if growth_pct_6mo else None,
+        "time_range": end_date.strftime("%Y-%m")
+    })
