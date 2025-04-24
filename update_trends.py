@@ -11,13 +11,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 print("Connected to Supabase")
 
 # Load dn_groups table
-dn_groups = supabase.table("dn_groups").select("id, keyword_group, criteria").execute().data
+dn_groups = supabase.table("dn_groups").select("id, name, filters").execute().data
 
 # For each group, fetch matching sales and calculate metrics
 trend_rows = []
 
 for group in dn_groups:
-    keyword_group = group["keyword_group"]
+    group_name = group["name"]
     group_id = group["id"]
 
     # Fetch domains in group
@@ -68,7 +68,7 @@ for group in dn_groups:
 
     # Prepare row
     trend_rows.append({
-        "keyword_group": keyword_group,
+        "group_name": group_name,
         "total_volume": total_volume,
         "total_avg_price": round(total_avg_price, 2),
         "total_median_price": round(total_median_price, 2),
@@ -80,3 +80,10 @@ for group in dn_groups:
         "growth_pct_6mo": round(growth_pct_6mo, 2) if growth_pct_6mo else None,
         "time_range": end_date.strftime("%Y-%m")
     })
+
+# Replace data in trends table
+if trend_rows:
+    supabase.table("trends").delete().neq("id", "").execute()
+    supabase.table("trends").insert(trend_rows).execute()
+
+print("✅ Trends updated with new metrics!")
