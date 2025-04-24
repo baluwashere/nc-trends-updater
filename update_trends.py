@@ -2,6 +2,7 @@ import os
 import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime, timedelta
+import json
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -13,21 +14,39 @@ print("Connected to Supabase")
 # Load dn_groups table
 dn_groups = supabase.table("dn_groups").select("id, name, filters").execute().data
 
-# For each group, fetch matching sales and calculate metrics
+# Load dn table
+dn_data = supabase.table("dn").select("id, domain_name, tld, word_count, domain_type").execute().data
+
+# For each group, filter matching domains and calculate metrics
 trend_rows = []
+
+def matches_filter(domain, filters):
+    name = domain["domain_name"].lower()
+    word_count = domain.get("word_count", 0)
+    tld = domain.get("tld", "")
+
+    if filters.get("tld") and filters["tld"].lower() != tld.lower():
+        return False
+    if filters.get("word_count") and filters["word_count"] != word_count:
+        return False
+    if filters.get("starts_with") and not name.startswith(filters["starts_with"].lower()):
+        return False
+    if filters.get("ends_with") and not name.endswith(filters["ends_with"].lower()):
+        return False
+
+    return True
 
 for group in dn_groups:
     group_name = group["name"]
     group_id = group["id"]
+    filters = group.get("filters", {})
 
-    # Fetch domains in group
-    dn_resp = supabase.table("dn").select("id").eq("group_id", group_id).execute()
-    domain_ids = [d["id"] for d in dn_resp.data]
-    if not domain_ids:
+    matching_ids = [d["id"] for d in dn_data if matches_filter(d, filters)]
+    if not matching_ids:
         continue
 
     # Fetch sales
-    sales_resp = supabase.table("sales").select("price_adjusted, date").in_("dn_id", domain_ids).execute()
+    sales_resp = supabase.table("sales").select("price_adjusted, date").in_("dn_id", matching_ids).execute()
     sales = pd.DataFrame(sales_resp.data)
     if sales.empty:
         continue
@@ -86,4 +105,4 @@ if trend_rows:
     supabase.table("trends").delete().neq("id", "").execute()
     supabase.table("trends").insert(trend_rows).execute()
 
-print("✅ Trends updated with new metrics!")
+print("✅ Trends updated with dynamic filter matching!")
